@@ -80,17 +80,12 @@ func (m Migrator) AlterColumn(value interface{}, name string) error {
 	return m.RunWithoutForeignKey(func() error {
 		return m.recreateTable(value, nil, func(rawDDL string, stmt *gorm.Statement) (sql string, sqlArgs []interface{}, err error) {
 			if field := stmt.Schema.LookUpField(name); field != nil {
-				// lookup field from table definition, ddl might looks like `'name' int,` or `'name' int)`
-				reg, err := regexp.Compile("(`|'|\"| )" + field.DBName + "(`|'|\"| ) .*?(,|\\)\\s*$)")
+				reg, err := regexp.Compile("(`|'|\"| )" + field.DBName + "(`|'|\"| ) .*?,")
 				if err != nil {
 					return "", nil, err
 				}
 
-				createSQL := reg.ReplaceAllString(rawDDL, fmt.Sprintf("`%v` ?$3", field.DBName))
-
-				if createSQL == rawDDL {
-					return "", nil, fmt.Errorf("failed to look up field %v from DDL %v", field.DBName, rawDDL)
-				}
+				createSQL := reg.ReplaceAllString(rawDDL, fmt.Sprintf("`%v` ?,", field.DBName))
 
 				return createSQL, []interface{}{m.FullDataTypeOf(field)}, nil
 			}
@@ -271,29 +266,28 @@ func (m Migrator) BuildIndexOptions(opts []schema.IndexOption, stmt *gorm.Statem
 
 func (m Migrator) CreateIndex(value interface{}, name string) error {
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		if stmt.Schema != nil {
-			if idx := stmt.Schema.LookIndex(name); idx != nil {
-				opts := m.BuildIndexOptions(idx.Fields, stmt)
-				values := []interface{}{clause.Column{Name: idx.Name}, clause.Table{Name: stmt.Table}, opts}
+		if idx := stmt.Schema.LookIndex(name); idx != nil {
+			opts := m.BuildIndexOptions(idx.Fields, stmt)
+			values := []interface{}{clause.Column{Name: idx.Name}, clause.Table{Name: stmt.Table}, opts}
 
-				createIndexSQL := "CREATE "
-				if idx.Class != "" {
-					createIndexSQL += idx.Class + " "
-				}
-				createIndexSQL += "INDEX ?"
-
-				if idx.Type != "" {
-					createIndexSQL += " USING " + idx.Type
-				}
-				createIndexSQL += " ON ??"
-
-				if idx.Where != "" {
-					createIndexSQL += " WHERE " + idx.Where
-				}
-
-				return m.DB.Exec(createIndexSQL, values...).Error
+			createIndexSQL := "CREATE "
+			if idx.Class != "" {
+				createIndexSQL += idx.Class + " "
 			}
+			createIndexSQL += "INDEX ?"
+
+			if idx.Type != "" {
+				createIndexSQL += " USING " + idx.Type
+			}
+			createIndexSQL += " ON ??"
+
+			if idx.Where != "" {
+				createIndexSQL += " WHERE " + idx.Where
+			}
+
+			return m.DB.Exec(createIndexSQL, values...).Error
 		}
+
 		return fmt.Errorf("failed to create index with name %v", name)
 	})
 }
@@ -301,10 +295,8 @@ func (m Migrator) CreateIndex(value interface{}, name string) error {
 func (m Migrator) HasIndex(value interface{}, name string) bool {
 	var count int
 	m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		if stmt.Schema != nil {
-			if idx := stmt.Schema.LookIndex(name); idx != nil {
-				name = idx.Name
-			}
+		if idx := stmt.Schema.LookIndex(name); idx != nil {
+			name = idx.Name
 		}
 
 		if name != "" {
@@ -322,9 +314,6 @@ func (m Migrator) RenameIndex(value interface{}, oldName, newName string) error 
 		var sql string
 		m.DB.Raw("SELECT sql FROM sqlite_master WHERE type = ? AND tbl_name = ? AND name = ?", "index", stmt.Table, oldName).Row().Scan(&sql)
 		if sql != "" {
-			if err := m.DropIndex(value, oldName); err != nil {
-				return err
-			}
 			return m.DB.Exec(strings.Replace(sql, oldName, newName, 1)).Error
 		}
 		return fmt.Errorf("failed to find index with name %v", oldName)
@@ -333,10 +322,8 @@ func (m Migrator) RenameIndex(value interface{}, oldName, newName string) error 
 
 func (m Migrator) DropIndex(value interface{}, name string) error {
 	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		if stmt.Schema != nil {
-			if idx := stmt.Schema.LookIndex(name); idx != nil {
-				name = idx.Name
-			}
+		if idx := stmt.Schema.LookIndex(name); idx != nil {
+			name = idx.Name
 		}
 
 		return m.DB.Exec("DROP INDEX ?", clause.Column{Name: name}).Error
@@ -398,7 +385,7 @@ func (m Migrator) recreateTable(value interface{}, tablePtr *string,
 			return nil
 		}
 
-		tableReg, err := regexp.Compile("\\s*('|`|\")?\\b" + table + "\\b('|`|\")?\\s*")
+		tableReg, err := regexp.Compile(" ('|`|\"| )" + table + "('|`|\"| ) ")
 		if err != nil {
 			return err
 		}
